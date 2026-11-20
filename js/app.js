@@ -1,6 +1,6 @@
 // 情侣小猫 · phone app. Talks to the computer kitten and to TA with the same encrypted protocol.
 import { Kitten, paintKitten, paintFx, paintZzz, posePoint, STRETCH_IN, STRETCH_OUT } from "./kitten.js";
-import { Link } from "./link.js";
+import { Link, mergeSince } from "./link.js";
 import { webCallUrl, randomId, parseCode } from "./proto.js";
 import { tr, setLang, lang } from "./i18n.js";
 import * as A from "./audio.js";
@@ -47,6 +47,7 @@ const S = {
   me: LS.get("me", { status: null, until: 0, sts: 0 }),
   ta: LS.get("ta", { name: "TA", coat: "photo_white", online: false, status: null, until: 0, tz: null }),
   set: LS.get("settings", { lang: "zh", call: "wechat" }),
+  since: LS.get("since", { since: 0, sset: 0 }),          // 在一起第 N 天: kept even after unpairing
   link: null, state: "offline", pending: new Map(), inCall: null, outCall: null, preview: null, booted: false,
 };
 if (!S.dev) { S.dev = "ph" + randomId(10); LS.set("dev", S.dev); }
@@ -72,6 +73,7 @@ function savePair(p) {
   const fresh = !S.pair || S.pair.c !== p.c;
   S.pair = { c: p.c, w: p.w || null, n: p.n || "我", m: COAT(p.m), t: p.t || "TA", k: COAT(p.k || "photo_white") };
   LS.set("pair", S.pair);
+  if (p.s) takeSince(p.s, p.ss || 0);
   if (fresh) {
     S.ta = { name: S.pair.t, coat: S.pair.k, online: false, status: null, until: 0, tz: null };
     LS.set("ta", S.ta);
@@ -81,34 +83,132 @@ function savePair(p) {
 }
 
 // ------------------------------------------------------------------------------------------- history
+// History and voice messages are kept encrypted on the phone (AES-256-GCM). The key is made on this phone and
+// can't be read out of it (non-extractable WebCrypto key in IndexedDB).
 const DB = (() => {
   let p = null;
   const open = () => p || (p = new Promise((res, rej) => {
-    const r = indexedDB.open("ck", 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("voice");
+    const r = indexedDB.open("ck", 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains("voice")) db.createObjectStore("voice");
+      if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   }));
-  const tx = async (mode, fn) => {
+  const tx = async (store, mode, fn) => {
     const db = await open();
     return new Promise((res, rej) => {
-      const t = db.transaction("voice", mode), q = fn(t.objectStore("voice"));
+      const t = db.transaction(store, mode), q = fn(t.objectStore(store));
       t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error);
     });
   };
+  const api = (store) => ({
+    put: (k, v) => tx(store, "readwrite", (s) => s.put(v, k)).catch(() => null),
+    get: (k) => tx(store, "readonly", (s) => s.get(k)).catch(() => null),
+    del: (k) => tx(store, "readwrite", (s) => s.delete(k)).catch(() => null),
+    clear: () => tx(store, "readwrite", (s) => s.clear()).catch(() => null),
+  });
+  return { voice: api("voice"), kv: api("kv") };
+})();
+
+const Vault = (() => {
+  let keyP = null;
+  const key = () => keyP || (keyP = (async () => {
+    let k = await DB.kv.get("key");
+    if (k && k.type === "secret") return k;
+    if (k && k.raw) return crypto.subtle.importKey("raw", k.raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+    k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    await DB.kv.put("key", k);
+    if (!(await DB.kv.get("key"))) {                // this browser can't keep a key object: keep raw bytes instead
+      const raw = crypto.getRandomValues(new Uint8Array(32));
+      await DB.kv.put("key", { raw });
+      k = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+    }
+    return k;
+  })());
   return {
-    put: (k, v) => tx("readwrite", (s) => s.put(v, k)).catch(() => null),
-    get: (k) => tx("readonly", (s) => s.get(k)).catch(() => null),
-    del: (k) => tx("readwrite", (s) => s.delete(k)).catch(() => null),
-    clear: () => tx("readwrite", (s) => s.clear()).catch(() => null),
+    async seal(bytes) {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      return { iv, ct: new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), bytes)) };
+    },
+    async open(box) {
+      if (!box || !box.iv) return box instanceof Uint8Array ? box : null;    // old, not yet encrypted
+      return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: box.iv }, await key(), box.ct));
+    },
   };
 })();
+const Voice = {
+  put: async (id, data) => DB.voice.put(id, await Vault.seal(data)),
+  get: async (id) => { try { return await Vault.open(await DB.voice.get(id)); } catch (e) { return null; } },
+  del: (id) => DB.voice.del(id),
+};
+
 const KEEP = 500;
-function hist() { return LS.get("hist", []); }
+let HIST = [];
+async function loadHist() {
+  try {
+    const box = await DB.kv.get("hist");
+    HIST = box ? JSON.parse(new TextDecoder().decode(await Vault.open(box))) : [];
+  } catch (e) { HIST = []; }
+  const old = LS.get("hist", null);                 // before encryption: move it in once, then delete the plain copy
+  if (old && old.length) { HIST = old.concat(HIST).slice(-KEEP); await saveHist(true); }
+  LS.del("hist");
+}
+let saveT = 0;
+async function saveHist(now_ = false) {
+  clearTimeout(saveT);
+  const go = async () => { try { await DB.kv.put("hist", await Vault.seal(new TextEncoder().encode(JSON.stringify(HIST)))); } catch (e) { /* best effort */ } };
+  if (now_) return go();
+  saveT = setTimeout(go, 300);
+}
+function hist() { return HIST; }
+function renderUnread() {
+  const seen = LS.get("histSeen", 0), n = hist().filter((e) => e.dir === "in" && e.ts > seen).length;
+  const b = $("btnHistory");
+  let dot = b.querySelector(".badge");
+  if (!n) { if (dot) dot.remove(); return; }
+  if (!dot) { dot = document.createElement("span"); dot.className = "badge"; b.appendChild(dot); }
+  dot.textContent = n > 99 ? "99+" : String(n);
+}
 function addHist(dir, kind, fields = {}) {
-  const h = hist();
-  h.push({ ts: now(), dir, kind, ...fields });
-  while (h.length > KEEP) { const old = h.shift(); if (old.vid) DB.del(old.vid); }
-  LS.set("hist", h);
+  HIST.push({ ts: now(), dir, kind, ...fields });
+  while (HIST.length > KEEP) { const old = HIST.shift(); if (old.vid) Voice.del(old.vid); }
+  saveHist();
+  if (dir === "in") renderUnread();
+}
+
+// ------------------------------------------------------------------------------------------- together days
+const MILESTONES = new Set([7, 30, 52, 99, 100, 200, 300, 365, 520, 1000, 1314]);
+function togetherDays() {
+  const t = +S.since.since || 0;
+  if (t <= 0) return 0;
+  const a = new Date(t * 1000), b = new Date();
+  const d0 = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate()), d1 = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.max(1, Math.round((d1 - d0) / 86400000) + 1);
+}
+function takeSince(since, sset) {
+  const got = mergeSince([S.since.since, S.since.sset], [since, sset]);
+  if (!got) return false;
+  S.since = { since: got[0], sset: got[1] };
+  LS.set("since", S.since);
+  S.link && S.link.updateProfile({ since: got[0], sinceSet: got[1] });
+  renderTogether();
+  return true;
+}
+function renderTogether() {
+  const n = togetherDays(), el = $("together");
+  if (!el) return;
+  el.classList.toggle("hidden", !n);
+  el.innerHTML = n ? `<i>❤</i>${esc(tr("在一起第 {0} 天", n))}` : "";
+}
+function checkMilestone() {
+  const n = togetherDays();
+  if (!n || LS.get("milestone", 0) === n) return;
+  if (MILESTONES.has(n) || n % 100 === 0 || (n >= 365 && n % 365 === 0)) {
+    LS.set("milestone", n);
+    setTimeout(() => { kitten.hop(20, 3); kitten.happyLeft = 2.5; burstHearts(12); say(tr("今天是你们在一起的第 {0} 天 ❤", n), 8, true); }, 1500);
+  }
 }
 
 // ------------------------------------------------------------------------------------------- kitten stage
@@ -123,12 +223,14 @@ function layout() {
   B.dpr = Math.min(2, window.devicePixelRatio || 1);           // 2x is plenty and saves battery on 3x phones
   B.W = r.width; B.H = r.height;
   cv.width = Math.round(r.width * B.dpr); cv.height = Math.round(r.height * B.dpr);
-  B.s = Math.max(0.75, Math.min(2.0, Math.min(B.W / 250, (B.H - 110) / 190)));
+  B.s = Math.max(0.75, Math.min(2.1, Math.min(B.W / 225, (B.H - 120) / 185)));
   if (B.x == null) B.x = B.W / 2;
   B.x = Math.max(bounds()[0], Math.min(bounds()[1], B.x));
 }
 function bounds() { const m = 70 * B.s; return [m, Math.max(m, B.W - m)]; }
 function foot() { return { x: B.x, y: B.H - 26 * B.s }; }
+// a status picture can be wider than the sitting kitten: shrink it a little so it always fits on the screen
+function ss() { const P = kitten.sprite; return P && kitten.status ? Math.min(B.s, (B.W - 16) / Math.max(180, P.wu)) : B.s; }
 
 function taStatusNow() { return S.ta.status && S.ta.until > now() && STATUS[S.ta.status] ? S.ta.status : null; }
 function myStatus() { return S.me.status && S.me.until > now() ? S.me.status : null; }
@@ -215,19 +317,19 @@ function burstHearts(n = 6) {
 
 function headPoint() {
   const P = kitten.sprite;
-  return P ? posePoint(kitten, foot(), B.s, P.head) : { x: B.x, y: B.H / 2 };
+  return P ? posePoint(kitten, foot(), ss(), P.head) : { x: B.x, y: B.H / 2 };
 }
 
 function draw() {
   g.setTransform(B.dpr, 0, 0, B.dpr, 0, 0);
   g.clearRect(0, 0, B.W, B.H);
   if (!kitten.sprite) return;
-  const f = foot();
-  paintKitten(g, kitten, f, B.s, B.dpr);
-  paintFx(g, kitten, f, B.s, { sigh: tr("呼~") });
+  const f = foot(), s = ss();
+  paintKitten(g, kitten, f, s, B.dpr);
+  paintFx(g, kitten, f, s, { sigh: tr("呼~") });
   if (kitten.sleeping || kitten.status === "sleep") {
     const P = kitten.posePhoto, z = P && P.fx.zzz;
-    paintZzz(g, kitten, z ? posePoint(kitten, f, B.s, z, false) : headPoint(), B.s, z ? 1 : kitten.facing);
+    paintZzz(g, kitten, z ? posePoint(kitten, f, s, z, false) : headPoint(), s, z ? 1 : kitten.facing);
   }
   for (const h of hearts) {
     const a = Math.max(0, Math.min(1, h.life / 0.6));
@@ -253,7 +355,7 @@ function placeBubble() {
   }
   const h = headPoint(), w = el.offsetWidth, ht = el.offsetHeight;
   const x = Math.max(w / 2 + 10, Math.min(B.W - w / 2 - 10, h.x));
-  const y = Math.max(6, h.y - 58 * B.s - ht);
+  const y = Math.max(44, h.y - 58 * ss() - ht);
   el.style.left = x + "px"; el.style.top = y + "px";
 }
 
@@ -266,9 +368,19 @@ function frame(ts) {
   tick(dt); draw();
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { cancelAnimationFrame(raf); raf = 0; }
-  else if (!raf && S.booted) { last = performance.now(); raf = requestAnimationFrame(frame); }
+  if (document.hidden) { cancelAnimationFrame(raf); raf = 0; S.link && S.link.pause(); }
+  else if (S.booted) {
+    if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
+    S.link && S.link.resume();
+    renderHeader();
+  }
 });
+window.addEventListener("online", () => S.link && S.link.resume());
+// iPhone keyboard: keep the input above it
+if (window.visualViewport) {
+  const fit = () => { $("app").style.height = window.visualViewport.height + "px"; };
+  window.visualViewport.addEventListener("resize", () => { fit(); if (S.booted) layout(); });
+}
 
 cv.addEventListener("pointerdown", (ev) => {
   const r = cv.getBoundingClientRect(), px = ev.clientX - r.left, py = ev.clientY - r.top, f = foot();
@@ -348,7 +460,7 @@ function renderHeader() {
   }
   $("taLine").textContent = line;
 }
-setInterval(() => S.booted && renderHeader(), 20000);
+setInterval(() => { if (S.booted) { renderHeader(); renderTogether(); checkMilestone(); } }, 20000);
 
 function renderTexts() {
   document.title = tr("情侣小猫");
@@ -358,6 +470,7 @@ function renderTexts() {
   $("actions").innerHTML = acts.map(([k, ic, lab]) =>
     `<button class="act ${k === "poke" ? "poke" : ""}" id="act-${k}">${ICON[ic]}<span>${esc(tr(lab))}</span></button>`).join("");
   $("btnHistory").innerHTML = ICON.clock; $("btnSettings").innerHTML = ICON.gear; $("sendSay").innerHTML = ICON.send;
+  renderUnread(); renderTogether();
   $("act-poke").onclick = sendPoke;
   $("act-voice").onclick = toggleVoice;
   $("act-call").onclick = () => startCall(false);
@@ -429,7 +542,7 @@ async function finishVoice(sendIt) {
   const dur = Math.round(r.secs * 10) / 10;
   const id = await send("voice", { dur, rate: A.RATE, codec: "ulaw" }, r.data);
   S.pending.set(id, "voice");
-  await DB.put(id, r.data);
+  await Voice.put(id, r.data);
   addHist("out", "voice", { vid: id, dur });
   A.chime("sent"); kitten.hop(14);
   say(offlineHint() || tr("语音已发送 · {0}", mmss(r.secs)), 3);
@@ -532,7 +645,7 @@ function onEvent(h, body) {
   } else if (t === "voice") {
     ack(h);
     const dur = +h.dur || body.length / A.RATE, vid = String(h.id || randomId(12));
-    DB.put(vid, body);
+    Voice.put(vid, body);
     addHist("in", "voice", { vid, dur, name });
     A.chime("note"); kitten.hop(18, 2);
     showCard({
@@ -569,6 +682,7 @@ function onPresence(p) {
   Object.assign(S.ta, { name: String(p.name || "TA").slice(0, 12), coat: COAT(p.coat), online: !!p.online,
                         status: p.status || null, until: +p.status_until || 0, tz: typeof p.tz === "number" ? p.tz : S.ta.tz });
   LS.set("ta", S.ta);
+  takeSince(p.since, p.sset);
   renderHeader();
   if (S.booted && S.ready) {
     if (!was && S.ta.online) toast(tr("{0} 上线啦~", S.ta.name));
@@ -578,6 +692,7 @@ function onPresence(p) {
 
 function onOwn(h) {
   if (h.t === "presence") {
+    takeSince(h.since, h.sset);
     if ((h.dev || "pc") === "pc") {                        // my computer: my name and kitten
       let changed = false;
       if (h.name && h.name !== S.pair.n) { S.pair.n = String(h.name).slice(0, 12); changed = true; }
@@ -657,6 +772,7 @@ function histText(e) {
 }
 function historySheet() {
   const h = hist().slice(-200);
+  LS.set("histSeen", now()); renderUnread();
   let day = "", rows = "";
   for (const e of h) {
     const dl = dayLabel(e.ts);
@@ -668,13 +784,14 @@ function historySheet() {
     <button class="plain" id="histClose">${esc(tr("关闭"))}</button>`, (el) => {
     el.querySelector("#histClose").onclick = closeSheet;
     el.querySelectorAll(".vplay").forEach((b) => b.addEventListener("click", async () => {
-      const data = b.dataset.v && (await DB.get(b.dataset.v));
+      const data = b.dataset.v && (await Voice.get(b.dataset.v));
       if (data) A.playUlaw(data); else toast(tr("这条语音找不到了"));
     }));
     el.scrollTop = el.scrollHeight;
   });
 }
 
+function ymd(ts) { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
 function seg(id, opts, cur) {
   return `<div class="seg" id="${id}">${opts.map(([v, lab]) => `<button data-v="${v}" class="${v === cur ? "on" : ""}">${esc(lab)}</button>`).join("")}</div>`;
 }
@@ -682,6 +799,9 @@ function settingsSheet() {
   openSheet(`<h2>${esc(tr("设置"))}</h2>
     <div class="label">${esc(tr("语言"))}</div>${seg("segLang", [["zh", "中文"], ["en", "English"]], lang())}
     <div class="label">${esc(tr("打电话用"))}</div>${seg("segCall", [["wechat", tr("微信（跨国最稳）")], ["web", tr("网页通话（免账号）")]], S.set.call)}
+    <div class="label">${esc(tr("在一起的日子"))}</div>
+    <div class="row" style="margin:0"><input type="date" id="sinceDate" class="field" style="flex:1"
+      max="${ymd(now())}" value="${S.since.since ? ymd(S.since.since) : ""}"><span class="muted" id="sinceN">${esc(tr("第 {0} 天", togetherDays()))}</span></div>
     <p class="muted small" style="margin-top:18px">${esc(tr("已和电脑连接 · 我是 {0}", S.pair.n))}</p>
     <button class="danger" id="unlink">${esc(tr("和电脑断开（只断开这部手机）"))}</button>`, (el) => {
     el.querySelectorAll("#segLang button").forEach((b) => b.onclick = () => {
@@ -690,6 +810,16 @@ function settingsSheet() {
     el.querySelectorAll("#segCall button").forEach((b) => b.onclick = () => {
       S.set.call = b.dataset.v; LS.set("settings", S.set); settingsSheet();
     });
+    el.querySelector("#sinceDate").onchange = (e) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e.target.value);
+      if (!m) return;
+      const t = new Date(+m[1], +m[2] - 1, +m[3], 12).getTime() / 1000;
+      if (t > now() + 86400 || +m[1] < 1990) return;
+      S.since = { since: t, sset: now() }; LS.set("since", S.since); LS.set("milestone", 0);
+      S.link && S.link.updateProfile({ since: S.since.since, sinceSet: S.since.sset });
+      el.querySelector("#sinceN").textContent = tr("第 {0} 天", togetherDays());
+      renderTogether();
+    };
     el.querySelector("#unlink").onclick = () => {
       closeSheet();
       showCard({ title: tr("断开这部手机？"), sub: tr("电脑和 TA 那边都不受影响，以后可以再扫码连接。"),
@@ -702,7 +832,7 @@ function settingsSheet() {
 async function unpairHere(msg) {
   const L = S.link; S.link = null;
   if (L) { try { await L.stop(); } catch (e) { /* closing anyway */ } }
-  LS.del("pair"); LS.del("ta"); LS.del("me");
+  LS.del("pair"); LS.del("ta"); LS.del("me");             // "since" stays: 解绑了也不重新记录
   S.pair = null; S.booted = false;
   cancelAnimationFrame(raf); raf = 0;
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
@@ -733,8 +863,11 @@ async function startApp() {
   S.booted = true; S.ready = false;
   last = performance.now(); if (!raf) raf = requestAnimationFrame(frame);
   const p = S.pair;
+  if (!S.since.since) { S.since = { since: now(), sset: 0 }; LS.set("since", S.since); }
+  renderTogether(); checkMilestone();
   const L = new Link({ code: p.c, deviceId: S.dev, who: p.w || undefined, name: p.n, coat: COAT(p.m), status: myStatus(),
-                       statusUntil: S.me.until, statusTs: S.me.sts, url: BROKER || null });
+                       statusUntil: S.me.until, statusTs: S.me.sts, url: BROKER || null,
+                       since: S.since.since, sinceSet: S.since.sset });
   L.onEvent = (h, b) => { try { onEvent(h, b); } catch (e) { console.error(e); } };
   L.onPresence = onPresence;
   L.onOwn = (h) => { try { onOwn(h); } catch (e) { console.error(e); } };
@@ -753,6 +886,6 @@ if (fromUrl) {
   // in Safari keep the link in the address so "Add to Home Screen" keeps it; inside the app tidy it away
   if (standalone()) history.replaceState(null, "", location.pathname + location.search);
 }
-if (S.pair) startApp(); else showPairing();
+loadHist().finally(() => { if (S.pair) startApp(); else showPairing(); });
 if ("serviceWorker" in navigator && !BROKER) navigator.serviceWorker.register("sw.js").catch(() => {});
-window.__ck = { S, kitten, B, onEvent, pickStatus, step: (dt) => { tick(dt); draw(); } };       // for tests
+window.__ck = { S, kitten, B, onEvent, pickStatus, hist, Voice, DB, step: (dt) => { tick(dt); draw(); } };       // for tests

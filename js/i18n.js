@@ -61,7 +61,9 @@ export const EN = {
   "{0} 上线啦~": "{0} is online~", "{0} 现在有空啦": "{0} is free now",
   "{0} 现在不在线，上线后会收到": "{0} is offline — they'll get it when they're back",
   "呼~": "Phew~", "刚刚": "just now", "{0} 发的": "sent at {0}",
-  "已在电脑上接听": "Answered on your computer", "已在电脑上挂断": "Declined on your computer",
+  "已在电脑上接听": "Answered on your computer",
+  "在一起第 {0} 天": "Day {0} together", "今天是你们在一起的第 {0} 天 ❤": "Today is day {0} of you two together ❤",
+  "在一起的日子": "Together since", "第 {0} 天": "Day {0}", "已在电脑上挂断": "Declined on your computer",
   "{0} 戳了你一下": "{0} nudged you", "{0} 解除了和你的绑定": "{0} unpaired from you",
   "电脑上解除了配对，这部手机也已断开": "Your computer unpaired, so this phone is disconnected too",
 };
