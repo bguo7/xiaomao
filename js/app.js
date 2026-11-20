@@ -294,9 +294,10 @@ function showCard(c) {
   }
   card = c;
   const el = $("card");
-  el.innerHTML = `<h3>${esc(c.title)}</h3>${c.sub ? `<p>${esc(c.sub)}</p>` : ""}<div class="btns">${
+  const av = c.avatar ? `<div class="cav" style="background-image:url(assets/thumbs/${FOLDER[COAT(c.avatar)]}/sit.webp)"><i>${c.badge || "❤"}</i></div>` : "";
+  el.innerHTML = `${av}<h3>${esc(c.title)}</h3>${c.sub ? `<p>${esc(c.sub)}</p>` : ""}<div class="btns">${
     c.buttons.map(([k, lab, cls]) => `<button data-k="${k}" class="${cls || ""}">${esc(lab)}</button>`).join("")}</div>`;
-  el.classList.remove("hidden");
+  el.classList.remove("hidden"); $("cardShade").classList.remove("hidden");
   el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     const keep = c.onButton && c.onButton(b.dataset.k);
     if (!keep) closeCard(b.dataset.k);
@@ -315,7 +316,7 @@ function closeCard(key = null, requeue = false) {
   clearTimeout(c.timer);
   c.onClose && c.onClose(key);
   card = null;
-  $("card").classList.add("hidden");
+  $("card").classList.add("hidden"); $("cardShade").classList.add("hidden");
   if (!requeue && cardQueue.length) setTimeout(() => showCard(cardQueue.shift()), 250);
 }
 
@@ -334,6 +335,7 @@ function hhmmTz(tz) {
 }
 function renderHeader() {
   $("taName").textContent = S.ta.name || "TA";
+  $("taAv").style.backgroundImage = `url(assets/thumbs/${FOLDER[COAT(S.ta.coat)]}/sit.webp)`;
   const on = S.state === "online" && S.ta.online;
   $("dot").classList.toggle("on", on);
   let line;
@@ -477,7 +479,7 @@ function onEvent(h, body) {
     ack(h); addHist("in", "poke", { name });
     if (age > 600) { say(tr("{0} 戳了你一下", name) + " · " + hhmm(h.ts), 5); kitten.hop(14); return; }
     A.chime("chime"); kitten.hop(20, 2); burstHearts(5);
-    showCard({ title: tr("{0} 想和你互动", name), sub: tr(pick(POKE_WORDS)), timeout: 22,
+    showCard({ title: tr("{0} 想和你互动", name), avatar: S.ta.coat, badge: "❤", sub: tr(pick(POKE_WORDS)), timeout: 22,
                buttons: [["ok", tr("知道啦"), ""], ["back", tr("回应 TA"), "love"]],
                onButton: (k) => { if (k === "back") sendPoke(); return false; } });
   } else if (t === "say") {
@@ -488,7 +490,7 @@ function onEvent(h, body) {
     A.chime("chime");
     const speak = () => { kitten.hop(12); say(text, 12, true); };
     if (!kitten.status) goTo(B.W / 2, speak); else speak();
-    showCard({ title: tr("{0} 对你说", name), sub: age > 600 ? tr("{0} 发的", hhmm(h.ts)) : tr("刚刚"), timeout: 40,
+    showCard({ title: tr("{0} 对你说", name), avatar: S.ta.coat, badge: "💬", sub: age > 600 ? tr("{0} 发的", hhmm(h.ts)) : tr("刚刚"), timeout: 40,
                buttons: [["ok", tr("知道啦"), ""], ["reply", tr("回复"), "love"]],
                onButton: (k) => { if (k === "reply") setTimeout(() => $("say").focus(), 150); return false; } });
   } else if (t === "call") {
@@ -499,7 +501,7 @@ function onEvent(h, body) {
     const mode = h.mode === "web" ? "web" : "wechat";
     S.inCall = { cid: h.cid, video, mode, name };
     showCard({
-      title: tr("{0} 邀请你{1}通话", name, callKind(video)), sub: tr(mode === "wechat" ? "接听后 TA 会在微信里打给你" : "接听后会打开网页通话"),
+      title: tr("{0} 邀请你{1}通话", name, callKind(video)), avatar: S.ta.coat, badge: "📞", sub: tr(mode === "wechat" ? "接听后 TA 会在微信里打给你" : "接听后会打开网页通话"),
       buttons: [["decline", tr("稍后"), "decline"], ["accept", tr("接听"), "accept"]], timeout: 45, priority: true, callIn: h.cid,
       onShow: () => ring(true), onClose: () => ring(false),
       onButton: (k) => {
@@ -534,7 +536,7 @@ function onEvent(h, body) {
     addHist("in", "voice", { vid, dur, name });
     A.chime("note"); kitten.hop(18, 2);
     showCard({
-      title: tr("{0} 给你发了一条语音", name), sub: `${mmss(dur)} · ${hhmm(h.ts)}`, timeout: 40,
+      title: tr("{0} 给你发了一条语音", name), avatar: S.ta.coat, badge: "🎙", sub: `${mmss(dur)} · ${hhmm(h.ts)}`, timeout: 40,
       buttons: [["ok", tr("好的"), ""], ["reply", tr("回复"), ""], ["play", tr("▶ 播放"), "primaryb"]],
       onButton: (k) => {
         if (k === "play") { A.playUlaw(body, +h.rate || A.RATE); const b = $("card").querySelector('[data-k="play"]'); if (b) b.textContent = tr("再听一遍"); return true; }
@@ -548,7 +550,7 @@ function onEvent(h, body) {
     if (!URL_RE.test(url) || url.length > 1500) return;
     addHist("in", "music", { url, name });
     A.chime("chime");
-    showCard({ title: tr("{0} 想和你一起听歌", name), sub: tr("来自 {0}", url.replace(/^https?:\/\/([^/]+).*$/, "$1")), timeout: 30,
+    showCard({ title: tr("{0} 想和你一起听歌", name), avatar: S.ta.coat, badge: "🎵", sub: tr("来自 {0}", url.replace(/^https?:\/\/([^/]+).*$/, "$1")), timeout: 30,
                buttons: [["later", tr("稍后"), ""], ["open", tr("打开听听"), "primaryb"]],
                onButton: (k) => { if (k === "open") window.open(url, "_blank"); return false; } });
   } else if (t === "unbind") {
@@ -584,6 +586,7 @@ function onOwn(h) {
     }
     if ((+h.sts || 0) > (S.me.sts || 0)) {                // I changed my status on the computer
       S.me = { status: h.status || null, until: +h.status_until || 0, sts: +h.sts };
+      S.preview = null;
       LS.set("me", S.me);
       S.link && S.link.updateProfile({ status: myStatus(), statusUntil: S.me.until, statusTs: S.me.sts });
     }
@@ -603,7 +606,7 @@ function onOwn(h) {
 function statusSheet() {
   const cur = myStatus(), folder = FOLDER[COAT(S.pair.m)];
   const cells = PICK.map((k) => `<button class="cell ${cur === k ? "on" : ""}" data-s="${k}">
-      <img src="assets/poses/${folder}/${k}.webp" alt="" style="width:64px;height:48px;object-fit:contain">${esc(tr(SHORT[k]))}</button>`).join("");
+      <img src="assets/thumbs/${folder}/${k}.webp" alt="" class="thumb">${esc(tr(SHORT[k]))}</button>`).join("");
   openSheet(`<h2>${esc(tr("我现在在…"))}</h2><div class="muted">${esc(tr("TA 的小猫会替你演出来"))}</div>
     <div class="grid">${cells}<button class="cell ${cur ? "" : "on"}" data-s="">${ICON.free}${esc(tr("空闲"))}</button></div>
     <div class="muted small">${esc(tr("选好后一直保持，直到你换成别的或选「空闲」"))}</div>`, (el) => {
