@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="小猫">
+<meta name="theme-color" content="#f7f1ea">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>情侣小猫</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app" class="hidden">
+  <header id="top">
+    <div id="who"><span id="dot"></span><b id="taName"></b><span id="taLine"></span></div>
+    <button id="btnHistory" class="round" aria-label="history"></button>
+    <button id="btnSettings" class="round" aria-label="settings"></button>
+  </header>
+  <main id="stage">
+    <canvas id="cv"></canvas>
+    <div id="bubble" class="hidden"></div>
+  </main>
+  <section id="composer">
+    <input id="say" maxlength="120" enterkeyhint="send" autocomplete="off">
+    <button id="sendSay" aria-label="send"></button>
+  </section>
+  <nav id="actions"></nav>
+</div>
+
+<div id="pair" class="hidden">
+  <div class="pairbox">
+    <div id="pairCat"></div>
+    <h1 id="pairTitle"></h1>
+    <p id="pairHow"></p>
+    <p id="pairOr" class="muted"></p>
+    <textarea id="pairLink" rows="3"></textarea>
+    <button id="pairGo" class="primary"></button>
+    <p id="pairErr" class="err"></p>
+    <p id="pairTip" class="muted small"></p>
+  </div>
+</div>
+
+<div id="shade" class="hidden"></div>
+<div id="sheet" class="hidden"></div>
+<div id="card" class="hidden"></div>
+<div id="toast"></div>
+
+<script src="vendor/mqtt.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
