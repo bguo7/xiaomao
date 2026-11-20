@@ -132,3 +132,18 @@ textarea.field, #pairLink { height: auto; padding: 10px 14px; resize: none; }
   background: var(--pink); color: white; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
   border: 2px solid #fbf6f0; box-sizing: content-box; }
 input[type=date].field { -webkit-appearance: none; appearance: none; }
+
+#btnPhoto { width: 44px; height: 44px; border-radius: 50%; background: var(--glass); border: 1px solid rgba(255,255,255,0.9);
+  display: grid; place-items: center; flex: none; color: #5a4a44; box-shadow: 0 2px 10px rgba(80, 50, 20, 0.06); }
+#btnPhoto svg { width: 22px; height: 22px; }
+#btnPhoto:active { transform: scale(0.96); }
+#card .cimg { display: block; max-width: 100%; max-height: 38vh; margin: 0 auto 14px; border-radius: 16px; object-fit: contain;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12); }
+#viewer { position: fixed; inset: 0; z-index: 50; background: rgba(12, 10, 10, 0.92); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: calc(var(--safe-t) + 20px) 14px calc(var(--safe-b) + 20px);
+  animation: fade 0.18s ease-out; -webkit-user-select: auto; user-select: auto; }
+#viewer img { max-width: 100%; max-height: 82vh; border-radius: 10px; -webkit-touch-callout: default; }
+#viewer p { color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 14px; }
+.msg.pic { padding: 4px; background: transparent !important; }
+.msg.pic .tm { color: var(--muted); padding: 0 4px; }
+.hthumb { display: block; max-width: 170px; max-height: 210px; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }

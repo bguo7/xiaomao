@@ -103,10 +103,10 @@ export class Link {
     const id = randomId(16);
     const header = { v: 1, id, from: this.deviceId, who: this.who, t: kind, ts: Date.now() / 1000,
                      name: this.name, coat: this.coat, ...fields };
-    if (kind === "voice") {
+    if (kind === "voice" || kind === "image") {      // big things go in 32 KB pieces
       const n = Math.max(1, Math.ceil(body.length / CHUNK));
       for (let seq = 0; seq < n; seq++) {
-        const h = { ...header, t: "voice_chunk", id: `${id}.${seq}`, vid: id, seq, n };
+        const h = { ...header, t: kind + "_chunk", id: `${id}.${seq}`, vid: id, seq, n };
         this.publish(this.tEvents, await this.crypto.seal(h, body.slice(seq * CHUNK, (seq + 1) * CHUNK)));
       }
     } else {
@@ -178,7 +178,7 @@ export class Link {
       if (["call_answer", "say", "poke", "music", "unbind"].includes(header.t)) this.onOwn(header);
       return;
     }
-    if (header.t === "voice_chunk") { this.chunk(header, body); return; }
+    if (header.t === "voice_chunk" || header.t === "image_chunk") { this.chunk(header, body); return; }
     this.onEvent(header, body);
   }
 
@@ -210,7 +210,7 @@ export class Link {
       const data = new Uint8Array(total);
       let o = 0;
       for (let i = 0; i < e.n; i++) { data.set(e.parts.get(i), o); o += e.parts.get(i).length; }
-      const head = { ...e.head, t: "voice", id: vid };
+      const head = { ...e.head, t: String(e.head.t || "voice_chunk").replace(/_chunk$/, ""), id: vid };
       delete head.vid; delete head.seq; delete head.n;
       this.onEvent(head, data);
     }

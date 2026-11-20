@@ -1,5 +1,5 @@
 // Keeps the app working offline and quick to open. Code: network first (updates arrive), pictures: cache first.
-const VERSION = "ck-2";
+const VERSION = "ck-3";
 const CORE = ["./", "index.html", "css/app.css", "js/app.js", "js/kitten.js", "js/link.js", "js/proto.js", "js/audio.js",
               "js/i18n.js", "vendor/mqtt.min.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png"];
 

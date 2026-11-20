@@ -27,6 +27,8 @@
     <div id="bubble" class="hidden"></div>
   </main>
   <section id="composer">
+    <button id="btnPhoto" aria-label="photo"></button>
+    <input id="photoIn" type="file" accept="image/*" hidden>
     <input id="say" maxlength="120" enterkeyhint="send" autocomplete="off">
     <button id="sendSay" aria-label="send"></button>
   </section>
@@ -50,6 +52,7 @@
 <div id="sheet" class="hidden"></div>
 <div id="cardShade" class="hidden"></div>
 <div id="card" class="hidden"></div>
+<div id="viewer" class="hidden"></div>
 <div id="toast"></div>
 
 <script src="vendor/mqtt.min.js"></script>

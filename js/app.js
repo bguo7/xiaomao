@@ -37,6 +37,7 @@ const ICON = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/></svg>',
   send: '<svg viewBox="0 0 24 24"><path fill="white" d="M3.4 11.2 19.6 4c.8-.3 1.5.4 1.2 1.2l-7.2 16.2c-.4.8-1.5.7-1.7-.1l-1.6-6.2-6.2-1.6c-.8-.2-.9-1.3-.1-1.7z"/></svg>',
+  photo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="8.5" cy="10" r="1.6"/><path d="m4 17.5 5-4.5 4 3 2.5-2 4.5 3.5"/></svg>',
   free: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 12.5 10 17l9-10"/></svg>',
 };
 
@@ -407,9 +408,12 @@ function showCard(c) {
   card = c;
   const el = $("card");
   const av = c.avatar ? `<div class="cav" style="background-image:url(assets/thumbs/${FOLDER[COAT(c.avatar)]}/sit.webp)"><i>${c.badge || "❤"}</i></div>` : "";
-  el.innerHTML = `${av}<h3>${esc(c.title)}</h3>${c.sub ? `<p>${esc(c.sub)}</p>` : ""}<div class="btns">${
+  const im = c.image ? `<img class="cimg" src="${c.image}" alt="">` : "";
+  el.innerHTML = `${av}<h3>${esc(c.title)}</h3>${c.sub ? `<p>${esc(c.sub)}</p>` : ""}${im}<div class="btns">${
     c.buttons.map(([k, lab, cls]) => `<button data-k="${k}" class="${cls || ""}">${esc(lab)}</button>`).join("")}</div>`;
   el.classList.remove("hidden"); $("cardShade").classList.remove("hidden");
+  const ci = el.querySelector(".cimg");
+  if (ci) ci.onclick = () => viewPhoto(c.image);
   el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     const keep = c.onButton && c.onButton(b.dataset.k);
     if (!keep) closeCard(b.dataset.k);
@@ -470,6 +474,7 @@ function renderTexts() {
   $("actions").innerHTML = acts.map(([k, ic, lab]) =>
     `<button class="act ${k === "poke" ? "poke" : ""}" id="act-${k}">${ICON[ic]}<span>${esc(tr(lab))}</span></button>`).join("");
   $("btnHistory").innerHTML = ICON.clock; $("btnSettings").innerHTML = ICON.gear; $("sendSay").innerHTML = ICON.send;
+  $("btnPhoto").innerHTML = ICON.photo;
   renderUnread(); renderTogether();
   $("act-poke").onclick = sendPoke;
   $("act-voice").onclick = toggleVoice;
@@ -482,6 +487,8 @@ function renderTexts() {
 $("btnHistory").onclick = () => historySheet();
 $("btnSettings").onclick = () => settingsSheet();
 $("sendSay").onclick = sendSay;
+$("btnPhoto").onclick = () => { A.audioContext(); $("photoIn").value = ""; $("photoIn").click(); };
+$("photoIn").onchange = (e) => { const f = e.target.files && e.target.files[0]; if (f) sendPhoto(f); };
 $("say").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sendSay(); } });
 
 function offlineHint() { return S.state === "online" && !S.ta.online ? tr("{0} 现在不在线，上线后会收到", S.ta.name) : null; }
@@ -546,6 +553,40 @@ async function finishVoice(sendIt) {
   addHist("out", "voice", { vid: id, dur });
   A.chime("sent"); kitten.hop(14);
   say(offlineHint() || tr("语音已发送 · {0}", mmss(r.secs)), 3);
+}
+
+// photos: made small (longest side 1600 px, JPEG) so they arrive fast, the right way up
+async function shrinkPhoto(file, side = 1600) {
+  let src;
+  try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch (e) { src = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); }); }
+  const w0 = src.width, h0 = src.height, k = Math.min(1, side / Math.max(w0, h0));
+  const c = document.createElement("canvas"); c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+  const g2 = c.getContext("2d"); g2.fillStyle = "#fff"; g2.fillRect(0, 0, c.width, c.height);
+  g2.imageSmoothingQuality = "high"; g2.drawImage(src, 0, 0, c.width, c.height);
+  for (const q of [0.82, 0.7, 0.58]) {
+    const b = await new Promise((res) => c.toBlob(res, "image/jpeg", q));
+    if (b && (b.size < 900000 || q === 0.58)) return new Uint8Array(await b.arrayBuffer());
+  }
+  return null;
+}
+const photoUrl = (bytes) => URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+async function sendPhoto(file) {
+  let data;
+  try { data = await shrinkPhoto(file); } catch (e) { data = null; }
+  if (!data) { say(tr("这张图打不开，换一张试试~"), 3); return; }
+  const id = await send("image", {}, data);
+  S.pending.set(id, "image");
+  await Voice.put(id, data);
+  addHist("out", "image", { vid: id });
+  A.chime("sent"); kitten.hop(16, 2); burstHearts(4);
+  say(offlineHint() || tr("照片已发给 {0}~", S.ta.name), 3);
+}
+function viewPhoto(url) {
+  const v = $("viewer");
+  v.innerHTML = `<img src="${url}" alt=""><p>${esc(tr("长按图片可以存到相册"))}</p>`;
+  v.classList.remove("hidden");
+  v.onclick = () => { v.classList.add("hidden"); v.innerHTML = ""; };
 }
 
 function callKind(video) { return tr(video ? "视频" : "语音"); }
@@ -657,6 +698,17 @@ function onEvent(h, body) {
         return false;
       },
     });
+  } else if (t === "image") {
+    ack(h);
+    if (!body.length || body.length > 8000000) return;
+    const vid = String(h.id || randomId(12));
+    Voice.put(vid, body);
+    addHist("in", "image", { vid, name });
+    A.chime("note"); kitten.hop(18, 2);
+    const url = photoUrl(body);
+    showCard({ title: tr("{0} 给你发了一张照片", name), avatar: S.ta.coat, badge: "📷", sub: hhmm(h.ts), image: url, timeout: 60,
+               buttons: [["ok", tr("好的"), ""], ["view", tr("看看"), "primaryb"]],
+               onButton: (k) => { if (k === "view") viewPhoto(url); return false; } });
   } else if (t === "music") {
     ack(h);
     const url = String(h.url || "");
@@ -672,7 +724,7 @@ function onEvent(h, body) {
     const kind = S.pending.get(h.ref);
     S.pending.delete(h.ref);
     const msg = { poke: tr("{0} 看到啦 ❤", name), voice: tr("{0} 收到语音啦", name), music: tr("{0} 收到邀请啦", name),
-                  say: tr("小猫把话带到啦，{0} 看到了 ❤", name) }[kind];
+                  say: tr("小猫把话带到啦，{0} 看到了 ❤", name), image: tr("{0} 收到照片啦", name) }[kind];
     if (msg) { say(msg, 2.5); kitten.hop(12); }
   }
 }
@@ -767,6 +819,7 @@ function histText(e) {
   if (e.kind === "poke") return esc(e.dir === "out" ? tr("❤ 戳了 {0} 一下", S.ta.name) : tr("❤ {0} 戳了你一下", e.name || S.ta.name));
   if (e.kind === "call") return esc(e.state === "missed" ? tr("☎ 未接{0}通话", k) : e.dir === "out" ? tr("☎ 你发起了{0}通话", k) : tr("☎ {0} 邀请你{1}通话", e.name || S.ta.name, k));
   if (e.kind === "music") return esc(tr("♫ 一起听：{0}", String(e.url || "").replace(/^https?:\/\/([^/]+).*$/, "$1")));
+  if (e.kind === "image") return `<img class="hthumb" data-p="${esc(e.vid || "")}" alt="">`;
   if (e.kind === "voice") return `<button class="vplay" data-v="${esc(e.vid || "")}" style="color:inherit;font-weight:600">${esc(tr("▶ 语音 {0}", mmss(+e.dur || 0)))}</button>`;
   return "";
 }
@@ -777,7 +830,7 @@ function historySheet() {
   for (const e of h) {
     const dl = dayLabel(e.ts);
     if (dl !== day) { day = dl; rows += `<div class="day">${esc(dl)}</div>`; }
-    rows += `<div class="msg ${e.dir === "out" ? "me" : ""}">${histText(e)}<span class="tm">${hhmm(e.ts)}</span></div>`;
+    rows += `<div class="msg ${e.dir === "out" ? "me" : ""} ${e.kind === "image" ? "pic" : ""}">${histText(e)}<span class="tm">${hhmm(e.ts)}</span></div>`;
   }
   openSheet(`<h2>${esc(tr("和 {0} 的历史消息", S.ta.name))}</h2>
     <div class="hist">${rows || `<p class="muted">${esc(tr("还没有消息，戳一下 TA 吧~"))}</p>`}</div>
@@ -787,6 +840,13 @@ function historySheet() {
       const data = b.dataset.v && (await Voice.get(b.dataset.v));
       if (data) A.playUlaw(data); else toast(tr("这条语音找不到了"));
     }));
+    el.querySelectorAll(".hthumb").forEach(async (im) => {
+      const data = im.dataset.p && (await Voice.get(im.dataset.p));
+      if (!data) { im.replaceWith(document.createTextNode(tr("🖼 照片（找不到了）"))); return; }
+      im.src = photoUrl(data);
+      im.onload = () => { el.scrollTop = el.scrollHeight; };
+      im.onclick = () => viewPhoto(im.src);
+    });
     el.scrollTop = el.scrollHeight;
   });
 }
